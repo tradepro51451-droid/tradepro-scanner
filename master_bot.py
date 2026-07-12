@@ -90,6 +90,47 @@ print(f"[OK] Python {sys.version.split()[0]} | libraries loaded")
 
 
 # =============================================================================
+# FIREBASE UPLOAD (scanner data -> Firebase 2)
+# =============================================================================
+# Service account JSON goes in env var FIREBASE_SCANNER_JSON (whole JSON text).
+# Data is written to Firestore collection: scannerData/{intraday,swing,investment,options}
+_fb_db = None
+
+def _init_firebase():
+    global _fb_db
+    raw = os.environ.get("FIREBASE_SCANNER_JSON", "").strip()
+    if not raw:
+        print("[FB] No FIREBASE_SCANNER_JSON env — Firebase upload disabled")
+        return
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, firestore
+        cred_dict = json.loads(raw)
+        cred = credentials.Certificate(cred_dict)
+        try:
+            firebase_admin.get_app()
+        except ValueError:
+            firebase_admin.initialize_app(cred)
+        _fb_db = firestore.client()
+        print("[FB] Firebase connected — scanner data will upload")
+    except Exception as e:
+        print(f"[FB] Firebase init failed: {e}")
+
+def _fb_upload(doc_name, data):
+    """Overwrite one doc under scannerData/ with the latest result."""
+    if _fb_db is None:
+        return
+    try:
+        payload = {
+            "data": data,
+            "updatedAt": int(time.time() * 1000),
+        }
+        _fb_db.collection("scannerData").document(doc_name).set(payload)
+    except Exception as e:
+        print(f"[FB] upload {doc_name} failed: {e}")
+
+
+# =============================================================================
 # GLOBAL STATE
 # =============================================================================
 
@@ -2106,8 +2147,23 @@ def _master_scan_loop():
                              ("investment", INVESTMENT)):
             try:
                 engine.update_all()   # progressive: writes state as it fetches
+                # push latest result to Firebase (overwrite — no data buildup)
+                try:
+                    _fb_upload(name, engine.get_dashboard_data())
+                except Exception as fe:
+                    print(f"[master] {name} firebase error: {fe}")
             except Exception as e:
                 print(f"[master] {name} sweep error: {e}")
+        # options status snapshot
+        try:
+            _fb_upload("options", {
+                "running": options_bot_running,
+                "phase": options_status.get("phase", "IDLE"),
+                "detail": options_status.get("detail", ""),
+                "next_session": options_status.get("next_session", ""),
+            })
+        except Exception as e:
+            print(f"[master] options firebase error: {e}")
         time.sleep(3)
 
 
@@ -2828,6 +2884,9 @@ def main():
     print("   Login ke baad yfinance engines apne aap start honge.")
     print("=" * 72)
     print()
+
+    # ── Firebase init (scanner data upload) ──
+    _init_firebase()
 
     # ── AUTO-LOGIN from environment variables (for cloud / 24x7) ──
     # Set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN in Render env vars.
