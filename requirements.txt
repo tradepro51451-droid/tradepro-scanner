@@ -3,3 +3,4 @@ requests
 pandas
 yfinance
 pytz
+firebase-admin
