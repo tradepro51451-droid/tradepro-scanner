@@ -1,0 +1,2 @@
+# tradepro-scanner
+trading bot
